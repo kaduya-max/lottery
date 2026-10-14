@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b1020">
+  <meta name="color-scheme" content="dark">
+  <title>くじ引き</title>
+  <script>
+    // ========================================================
+    // 画像ファイル名（このまま固定して使えます）
+    // index.html と同じフォルダの画像を差し替えてください。
+    // ========================================================
+    const IMAGE_FILES = Object.freeze({
+      left_jackpot: "ooatari.png",        // ひりつき：大当たり 5％
+      left_win: "atari.png",             // ひりつき：当たり 90％
+      left_lose: "hazure.png",           // ひりつき：はずれ 5％
+      right_jackpot: "migi_ooatari.png", // ノーマル：大当たり 10％
+      right_win: "migi_atari.png"        // ノーマル：当たり 90％
+    });
+    const START_SCREEN_PC = "left_win";
+    const DRAW_DURATION_MS = 3000;  // 演出時間3秒
+    const INPUT_LOCK_MS = 2000;     // 入力ロック最低2秒。演出中も無効
+  </script>
+  <style>
+    :root { font-family: system-ui, -apple-system, "Yu Gothic", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif; color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body { background: #0b1020; color: #fff; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
+    [hidden] { display: none !important; }
+
+    /* スマホの開始画面 */
+    #menu { position: fixed; inset: 0; z-index: 5; overflow-y: auto; min-height: 100svh;
+      display: flex; align-items: center; justify-content: center;
+      padding: max(24px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
+      background: radial-gradient(ellipse at 40% -20%, #354b81, transparent 60%), linear-gradient(155deg, #131c34 0%, #080b16 85%); }
+    .menu-inner { max-width: 430px; width: 100%; margin: auto; }
+    .eyebrow { text-align: center; margin: 0 0 10px; color: #abbadc; font-size: 12px; font-weight: 800; letter-spacing: .3em; }
+    h1 { text-align: center; margin: 0 0 36px; font-size: clamp(25px, 7vw, 33px); letter-spacing: .06em; line-height: 1.4; }
+    .options { display: grid; gap: 16px; }
+    .option { position: relative; width: 100%; border: 1px solid #ffffff60; border-radius: 21px;
+      text-align: left; padding: 23px 24px; color: white; font: inherit; cursor: pointer;
+      transition: transform .13s ease, filter .13s ease; overflow: hidden; box-shadow: 0 12px 35px #0004; }
+    .option:active { transform: scale(.98); }
+    .option:hover { filter: brightness(1.07); }
+    .option.hot { background: linear-gradient(115deg, #762941, #a64b50); }
+    .option.normal { background: linear-gradient(115deg, #224b7c, #237481); }
+    .option::after { content: ""; position: absolute; width: 140px; height: 140px; top: -60px; right: -42px;
+      border: 2px solid #ffffff25; border-radius: 50%; box-shadow: 0 0 0 27px #ffffff08, 0 0 0 54px #ffffff07; pointer-events: none; }
+    .option-name { display: block; font-weight: 900; font-size: clamp(30px, 8vw, 37px); letter-spacing: .06em; }
+    .option-detail { display: block; font-size: 12px; opacity: .91; margin-top: 8px; font-weight: 650; line-height: 1.5; }
+    .arrow { position: absolute; top: 29px; right: 23px; font-size: 28px; opacity: .75; }
+    .menu-hint { text-align: center; color: #a9b4cf; font-size: 12px; margin: 24px 0 0; }
+
+    /* 抽選中と結果表示中は「画像のみ」（スマホには戻る矢印だけ） */
+    #game { position: fixed; inset: 0; overflow: hidden; background: #060a13; }
+    #resultImage { display: block; position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: contain; pointer-events: none; -webkit-user-drag: none; }
+    #missing { display: none; position: absolute; inset: 0; align-items: center; justify-content: center;
+      text-align: center; padding: 24px; color: #fff; font-weight: 750; z-index: 1; background: #101729; }
+    .cover { position: absolute; top: 0; bottom: 0; z-index: 2; background: transparent; border: 0; margin: 0; padding: 0; cursor: pointer; }
+    #replay { left: 0; width: 100%; }
+    #leftZone { left: 0; width: 50%; }
+    #rightZone { right: 0; width: 50%; }
+    #back { position: absolute; z-index: 3; top: max(13px,env(safe-area-inset-top)); left: max(13px,env(safe-area-inset-left));
+      width: 46px; height: 46px; display: grid; place-items: center; border-radius: 50%;
+      background: #0e1626b8; color: #fff; border: 1px solid #ffffff76; font-size: 28px; cursor: pointer; }
+    .drawing .cover { pointer-events: none; }
+    .drawing #back { display: none; }
+    .touch-mode .desktop-control { display: none; }
+    body:not(.touch-mode) .mobile-control { display: none; }
+    button:focus-visible { outline: 3px solid #ffdc81; outline-offset: -3px; }
+    @media (max-height: 570px) { h1 { margin-bottom: 15px; } .option { padding: 16px 20px; } .options { gap: 11px; } .menu-hint { margin-top: 12px; } }
+    @media (prefers-reduced-motion: reduce) { .option { transition: none; } }
+  </style>
+</head>
+<body>
+  <section id="menu" hidden aria-label="くじの種類を選ぶ">
+    <div class="menu-inner">
+      <p class="eyebrow">LUCKY DRAW</p>
+      <h1>くじを選んでください</h1>
+      <div class="options">
+        <button id="hot" type="button" class="option hot">
+          <span class="option-name">ひりつき</span>
+          <span class="option-detail">大当たり 5%　当たり 90%　はずれ 5%</span>
+          <span class="arrow" aria-hidden="true">›</span>
+        </button>
+        <button id="normal" type="button" class="option normal">
+          <span class="option-name">ノーマル</span>
+          <span class="option-detail">大当たり 10%　当たり 90%</span>
+          <span class="arrow" aria-hidden="true">›</span>
+        </button>
+      </div>
+      <p class="menu-hint">コースを選ぶと抽選が始まります</p>
+    </div>
+  </section>
+
+  <main id="game" hidden aria-label="抽選結果">
+    <img id="resultImage" alt="抽選結果" draggable="false">
+    <div id="missing" role="status">結果画像を読み込めませんでした。画像ファイルを確認してください。</div>
+    <button id="replay" type="button" class="cover mobile-control" aria-label="同じコースでもう一度抽選"></button>
+    <button id="leftZone" type="button" class="cover desktop-control" aria-label="ひりつきを抽選"></button>
+    <button id="rightZone" type="button" class="cover desktop-control" aria-label="ノーマルを抽選"></button>
+    <button id="back" type="button" class="mobile-control" aria-label="コース選択へ戻る">‹</button>
+  </main>
+
+  <script>
+    "use strict";
+    const menu = document.getElementById("menu");
+    const game = document.getElementById("game");
+    const photo = document.getElementById("resultImage");
+    const missing = document.getElementById("missing");
+    const touchMode = matchMedia("(max-width: 720px), (pointer: coarse)").matches;
+    document.body.classList.toggle("touch-mode", touchMode);
+    const leftKeys = ["left_jackpot", "left_win", "left_lose"];
+    const rightKeys = ["right_jackpot", "right_win"];
+
+    let selectedCourse = null;
+    let drawing = false;
+    let lockUntil = 0;
+    let spinHandle = null;
+    let finishHandle = null;
+    let displayedKey = "";
+    let imageRequestId = 0;
+
+    // 初回表示前に画像を読み込み、切り替え時のちらつきを減らす。
+    for (const file of Object.values(IMAGE_FILES)) {
+      const preload = new Image();
+      preload.src = file;
+    }
+
+    // 各回は独立抽選。可能ならブラウザの暗号学的乱数源を使用。
+    function randomValue() {
+      if (globalThis.crypto?.getRandomValues) {
+        const buffer = new Uint32Array(1);
+        globalThis.crypto.getRandomValues(buffer);
+        return buffer[0] / 4294967296;
+      }
+      return Math.random();
+    }
+
+    function getResult(side) {
+      const r = randomValue();
+      if (side === "left") {
+        return r < 0.05 ? "left_jackpot" : r < 0.95 ? "left_win" : "left_lose";
+      }
+      return r < 0.10 ? "right_jackpot" : "right_win";
+    }
+
+    function showPicture(key) {
+      displayedKey = key;
+      const id = ++imageRequestId;
+      const file = IMAGE_FILES[key];
+      if (!file) return;
+      photo.style.display = "block";
+      missing.style.display = "none";
+      photo.onerror = () => {
+        if (id === imageRequestId) {
+          photo.style.display = "none";
+          missing.style.display = "flex";
+        }
+      };
+      photo.src = file;
+    }
+
+    function draw(side) {
+      const now = performance.now();
+      if (drawing || now < lockUntil) return;
+      lockUntil = now + INPUT_LOCK_MS;
+      drawing = true;
+      document.body.classList.add("drawing");
+
+      const choice = getResult(side);  // 抽選確率は最後の画像にのみ適用
+      const pool = side === "left" ? leftKeys : rightKeys;
+      let frame = 0;
+      clearInterval(spinHandle);
+      clearTimeout(finishHandle);
+      showPicture(pool[0]);
+      spinHandle = setInterval(() => {
+        frame = (frame + 1) % pool.length;
+        showPicture(pool[frame]);
+      }, 120);
+      finishHandle = setTimeout(() => {
+        clearInterval(spinHandle);
+        spinHandle = null;
+        showPicture(choice);
+        drawing = false;
+        document.body.classList.remove("drawing");
+      }, DRAW_DURATION_MS);
+    }
+
+    function selectCourse(side) {
+      if (drawing) return;
+      selectedCourse = side;
+      menu.hidden = true;
+      game.hidden = false;
+      draw(side);
+    }
+
+    function backToMenu() {
+      if (drawing || !touchMode) return;
+      selectedCourse = null;
+      game.hidden = true;
+      menu.hidden = false;
+    }
+
+    document.getElementById("hot").addEventListener("click", () => selectCourse("left"));
+    document.getElementById("normal").addEventListener("click", () => selectCourse("right"));
+    document.getElementById("back").addEventListener("click", backToMenu);
+    document.getElementById("replay").addEventListener("click", () => {
+      if (selectedCourse !== null) draw(selectedCourse);
+    });
+    document.getElementById("leftZone").addEventListener("click", () => draw("left"));
+    document.getElementById("rightZone").addEventListener("click", () => draw("right"));
+    document.addEventListener("keydown", event => {
+      if (event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
+      if (event.target instanceof HTMLElement &&
+          (event.target.matches("input,textarea,select") || event.target.isContentEditable)) return;
+      const key = event.key.toLowerCase();
+      if (key === "z" || key === "x") {
+        event.preventDefault();
+        const side = key === "z" ? "left" : "right";
+        if (touchMode && !menu.hidden) selectCourse(side);
+        else if (!touchMode || selectedCourse !== null) draw(side);
+      } else if (key === "f") {
+        event.preventDefault();
+        if (document.fullscreenElement) {
+          document.exitFullscreen?.().catch(() => {});
+        } else {
+          document.documentElement.requestFullscreen?.().catch(() => {});
+        }
+      }
+    });
+
+    if (touchMode) {
+      menu.hidden = false;
+    } else {
+      game.hidden = false;
+      showPicture(START_SCREEN_PC);
+    }
+
+    // HTTPS公開時のみオフラインキャッシュを登録します。
+    // PCでHTMLを直接開いた場合（file://）は通常通り動作します。
+    if ("serviceWorker" in navigator &&
+        (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("./sw.js").catch(error => {
+          console.info("オフラインキャッシュを登録できませんでした", error);
+        });
+      });
+    }
+  </script>
+</body>
+</html>
